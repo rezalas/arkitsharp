@@ -19,12 +19,44 @@ namespace arkitSharp
         private static readonly long ValidSigVer = 2653586369;
         static void Main(string[] args)
         {
+            Serilog.Events.LogEventLevel logLevel;
+
+            string logLevelSelected = args.FirstOrDefault(x => x.StartsWith("log=")) ?? "log=fatal";
+            switch (logLevelSelected.Split('=')[1].ToLower())
+            {
+                case "debug":
+                    logLevel = Serilog.Events.LogEventLevel.Debug;
+                    break;
+                case "warning":
+                    logLevel = Serilog.Events.LogEventLevel.Warning;
+                    break;
+                case "information":
+                    logLevel = Serilog.Events.LogEventLevel.Information;
+                    break;
+                case "verbose":
+                    logLevel = Serilog.Events.LogEventLevel.Verbose;
+                    break;
+                case "fatal":
+                default:
+                    logLevel = Serilog.Events.LogEventLevel.Fatal;
+                    break;
+            }
+            
             Log.Logger = new LoggerConfiguration()
                 .WriteTo
-                .Console(Serilog.Events.LogEventLevel.Error, theme: AnsiConsoleTheme.Code)
+                .Console(logLevel, theme: AnsiConsoleTheme.Code)
                 .CreateLogger();
 
-            Unpack(args[0], args[1], Log.Logger);
+            bool wasSuccessful = Unpack(args[0], args[1], Log.Logger);
+            if (wasSuccessful)
+            {
+                return;
+            }
+
+            else Log.Logger.Error("Unknown error, please set log level to debug using log=debug");
+
+            // failed, cleanup file if created.
+
         }
 
         public static bool Unpack(string source, string dest, ILogger log)
@@ -53,11 +85,9 @@ namespace arkitSharp
                 var compressionIndex = new List<(long compressedSize, long uncompressedSize)>();
                 while(sizeIndexed < unpackedTotalSize)
                 {
-                    byte[] buffer = new byte[8];
-                    freader.Read(buffer);
                     long compressed = Get8byteChunk(freader);
                     long uncompressed = Get8byteChunk(freader);
-                    compressionIndex.Append((compressed, uncompressed));
+                    compressionIndex.Add((compressed, uncompressed));
                     sizeIndexed += uncompressed;
                     Log.Debug($"Compression Index Size: {compressionIndex.Count} Size Indexed: {sizeIndexed} Size Unpacked: {unpackedTotalSize} Compressed Length: {compressed} Uncompressed: {uncompressed}");                 
                 }
@@ -76,13 +106,14 @@ namespace arkitSharp
                         int bytesRead = freader.Read(buffer);
                         var decompressedData = DecompressZlib(buffer, data.uncompressedSize);
 
-                        if (bytesRead != data.uncompressedSize)
+                        if (decompressedData.Length != data.uncompressedSize)
                         {
                             Log.Error($"Chunk size mismatch. Expected: {data.uncompressedSize} Actual: {bytesRead}");                 
                             return IsSuccessful;
                         }
 
                         fwriter.Write(decompressedData);
+                        fwriter.Flush();
                     }
                 }
 
@@ -97,7 +128,7 @@ namespace arkitSharp
             byte[] buffer = new byte[8];
             int readBytes = freader.Read(buffer);
 
-            return Convert.ToInt64(buffer);
+            return BitConverter.ToInt64(buffer);
         }
 
         private static byte[] DecompressZlib(byte[] compressedData, long uncompressedSize)
